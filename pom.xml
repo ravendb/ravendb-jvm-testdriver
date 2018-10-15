@@ -6,7 +6,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-test-driver</artifactId>
-    <version>4.1.1-SNAPSHOT</version>
+    <version>4.1.2-SNAPSHOT</version>
 
     <name>RavenDB Test Driver</name>
     <description>RavenDB package for writing integration tests against RavenDB server</description>
@@ -42,7 +42,7 @@
     </developers>
 
     <properties>
-        <raven.embedded.version>4.1.1-SNAPSHOT</raven.embedded.version>
+        <raven.embedded.version>4.1.2</raven.embedded.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>

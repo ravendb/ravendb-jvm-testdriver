@@ -4,6 +4,7 @@ import net.ravendb.client.documents.IDocumentStore;
 import net.ravendb.client.documents.session.IDocumentSession;
 import org.junit.jupiter.api.Test;
 
+@SuppressWarnings("WeakerAccess")
 public class BasicTest extends RavenTestDriver {
 
     @Test
@@ -32,6 +33,7 @@ public class BasicTest extends RavenTestDriver {
         }
     }
 
+    @SuppressWarnings("WeakerAccess")
     public static class Person {
         private String id;
         private String name;

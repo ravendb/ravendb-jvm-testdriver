@@ -29,6 +29,7 @@ import net.ravendb.embedded.CommandLineArgumentEscaper;
 import net.ravendb.embedded.EmbeddedServer;
 import net.ravendb.embedded.ServerOptions;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.client.config.RequestConfig;
@@ -50,6 +51,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 @SuppressWarnings({"WeakerAccess", "unused", "Convert2MethodRef"})
@@ -83,7 +85,7 @@ public class RavenTestDriver implements CleanCloseable {
 
     protected boolean disposed;
 
-    protected static Consumer<ServerOptions> customizeServer = null;
+    protected static Supplier<ServerOptions> serverOptions = () -> defaultServerOptions();
 
     protected IDocumentStore getDocumentStore() {
         return getDocumentStore(null, null);
@@ -269,26 +271,56 @@ public class RavenTestDriver implements CleanCloseable {
         }
     }
 
+    private static void cleanupTempDirs(File... dirs) {
+        try {
+            // try up to 30 times in 200 ms intervals
+            for (int i = 0; i < 30; i++) {
+                boolean anyFailure = false;
+                for (File dir : dirs) {
+                    if (dir.exists()) {
+                        if (!FileUtils.deleteQuietly(dir)) {
+                            anyFailure = true;
+                        }
+                    }
+                }
+
+                if (!anyFailure) {
+                    return;
+                }
+
+                Thread.sleep(200);
+            }
+        } catch (InterruptedException e) {
+            // ignore
+        }
+    }
+
+    private static ServerOptions defaultServerOptions() {
+        ServerOptions options = new ServerOptions();
+
+        File serverDir = Files.createTempDir();
+        serverDir.deleteOnExit();
+
+        File dataDir = Files.createTempDir();
+        dataDir.deleteOnExit();
+
+        File logsDir = Files.createTempDir();
+        logsDir.deleteOnExit();
+
+        options.setDataDirectory(dataDir.getAbsolutePath());
+        options.setTargetServerLocation(serverDir.getAbsolutePath());
+        options.setLogsPath(logsDir.getAbsolutePath());
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            cleanupTempDirs(serverDir, dataDir, logsDir);
+        }));
+
+        return options;
+    }
+
     private static IDocumentStore runServer() {
         try {
-            ServerOptions options = new ServerOptions();
-
-            File serverDir = Files.createTempDir();
-            serverDir.deleteOnExit();
-
-            File dataDir = Files.createTempDir();
-            dataDir.deleteOnExit();
-
-            File logsDir = Files.createTempDir();
-            logsDir.deleteOnExit();
-
-            options.setDataDirectory(dataDir.getAbsolutePath());
-            options.setTargetServerLocation(serverDir.getAbsolutePath());
-            options.setLogsPath(logsDir.getAbsolutePath());
-
-            if (customizeServer != null) {
-                customizeServer.accept(options);
-            }
+            ServerOptions options = serverOptions.get();
 
             options.getCommandLineArgs().add(0,
                     "-c " + CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
