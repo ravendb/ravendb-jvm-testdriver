@@ -15,6 +15,7 @@ import net.ravendb.client.documents.operations.IndexInformation;
 import net.ravendb.client.documents.operations.MaintenanceOperationExecutor;
 import net.ravendb.client.documents.operations.indexes.GetIndexErrorsOperation;
 import net.ravendb.client.documents.session.IDocumentSession;
+import net.ravendb.client.documents.smuggler.DatabaseSmugglerImportOptions;
 import net.ravendb.client.exceptions.RavenException;
 import net.ravendb.client.exceptions.TimeoutException;
 import net.ravendb.client.exceptions.cluster.NoLeaderException;
@@ -29,7 +30,6 @@ import net.ravendb.embedded.CommandLineArgumentEscaper;
 import net.ravendb.embedded.EmbeddedServer;
 import net.ravendb.embedded.ServerOptions;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.client.config.RequestConfig;
@@ -85,7 +85,14 @@ public class RavenTestDriver implements CleanCloseable {
 
     protected boolean disposed;
 
-    protected static Supplier<ServerOptions> serverOptions = () -> defaultServerOptions();
+    private static Supplier<ServerOptions> serverOptions = () -> defaultServerOptions();
+
+    public static void configureServer(ServerOptions options) {
+        if (TEST_SERVER_STORE.isValueCreated()) {
+            throw new IllegalStateException("Cannot configure server after it was started. " +
+                    "Please call 'configureServer' method before any 'getDocumentStore' is called.");
+        }
+    }
 
     protected IDocumentStore getDocumentStore() {
         return getDocumentStore(null, null);
@@ -126,6 +133,12 @@ public class RavenTestDriver implements CleanCloseable {
                 // ignore
             }
         });
+
+        try {
+            importDatabase(store, name);
+        } catch (IOException e) {
+            throw new RavenException("Unable to import database: " + e.getMessage(), e);
+        }
 
         setupDatabase(store);
 
@@ -316,6 +329,17 @@ public class RavenTestDriver implements CleanCloseable {
         }));
 
         return options;
+    }
+
+    private void importDatabase(DocumentStore docStore, String database) throws IOException {
+        DatabaseSmugglerImportOptions options = new DatabaseSmugglerImportOptions();
+        if (getDatabaseDumpFilePath() != null) {
+            docStore.smuggler().forDatabase(database)
+                    .importAsync(options, getDatabaseDumpFilePath());
+        } else if (getDatabaseDumpFileStream() != null) {
+            docStore.smuggler().forDatabase(database)
+                    .importAsync(options, getDatabaseDumpFileStream());
+        }
     }
 
     private static IDocumentStore runServer() {
