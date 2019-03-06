@@ -63,6 +63,7 @@ public class RavenTestDriver implements CleanCloseable {
     private final ConcurrentMap<DocumentStore, Boolean> _documentStores = new ConcurrentHashMap<>();
 
     private static AtomicInteger _index = new AtomicInteger(0);
+    private static ServerOptions _globalServerOptions;
 
     private static File _emptySettingsFile;
 
@@ -92,6 +93,8 @@ public class RavenTestDriver implements CleanCloseable {
             throw new IllegalStateException("Cannot configure server after it was started. " +
                     "Please call 'configureServer' method before any 'getDocumentStore' is called.");
         }
+
+        _globalServerOptions = options;
     }
 
     protected IDocumentStore getDocumentStore() {
@@ -344,7 +347,7 @@ public class RavenTestDriver implements CleanCloseable {
 
     private static IDocumentStore runServer() {
         try {
-            ServerOptions options = serverOptions.get();
+            ServerOptions options = ObjectUtils.firstNonNull(_globalServerOptions, serverOptions.get());
 
             options.getCommandLineArgs().add(0,
                     "-c " + CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
