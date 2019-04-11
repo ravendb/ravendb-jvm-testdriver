@@ -349,9 +349,11 @@ public class RavenTestDriver implements CleanCloseable {
         try {
             ServerOptions options = ObjectUtils.firstNonNull(_globalServerOptions, serverOptions.get());
 
-            options.getCommandLineArgs().add(0,
-                    "-c " + CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
-            options.getCommandLineArgs().add("--RunInMemory=true");
+            List<String> commandLineArgs = options.getCommandLineArgs();
+
+            commandLineArgs.add(0,"-c");
+            commandLineArgs.add(1, CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            commandLineArgs.add("--RunInMemory=true");
 
             TEST_SERVER.startServer(options);
 
