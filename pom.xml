@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-test-driver</artifactId>
-    <version>5.0.1-SNAPSHOT</version>
+    <version>5.0.1</version>
 
     <name>RavenDB Test Driver</name>
     <description>RavenDB package for writing integration tests against RavenDB server</description>
@@ -15,7 +15,7 @@
         <connection>scm:git:https://github.com/ravendb/ravendb-jvm-testdriver.git</connection>
         <developerConnection>scm:git:git@github.com:ravendb/ravendb-jvm-testdriver.git</developerConnection>
         <url>https://github.com/ravendb/ravendb-jvm-testdriver.git</url>
-        <tag>HEAD</tag>
+        <tag>v5.0.1</tag>
     </scm>
 
     <licenses>
