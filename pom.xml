@@ -40,7 +40,7 @@
     </developers>
 
     <properties>
-        <raven.embedded.version>5.4.0</raven.embedded.version>
+        <raven.embedded.version>5.4.1</raven.embedded.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
