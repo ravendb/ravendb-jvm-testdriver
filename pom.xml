@@ -4,7 +4,7 @@
 
     <groupId>net.ravendb</groupId>
     <artifactId>ravendb-test-driver</artifactId>
-    <version>5.4.4-SNAPSHOT</version>
+    <version>6.0.0-SNAPSHOT</version>
 
     <name>RavenDB Test Driver</name>
     <description>RavenDB package for writing integration tests against RavenDB server</description>
@@ -21,7 +21,7 @@
     <licenses>
         <license>
             <name>RavenDB License</name>
-            <url>https://github.com/ravendb/ravendb-jvm-testdriver/blob/v4.1/LICENSE</url>
+            <url>https://github.com/ravendb/ravendb-jvm-testdriver/blob/v6.0/LICENSE</url>
         </license>
     </licenses>
 
