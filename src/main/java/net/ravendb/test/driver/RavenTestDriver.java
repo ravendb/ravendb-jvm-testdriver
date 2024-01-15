@@ -31,8 +31,9 @@ import net.ravendb.embedded.EmbeddedServer;
 import net.ravendb.embedded.ServerOptions;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ObjectUtils;
-import org.apache.http.HttpHost;
-import org.apache.http.client.config.RequestConfig;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
+import org.apache.hc.core5.http.HttpHost;
 
 import java.awt.*;
 import java.io.File;
@@ -369,17 +370,10 @@ public class RavenTestDriver implements CleanCloseable {
         }
     }
 
-    public CleanCloseable withFiddler() {
-        RequestExecutor.requestPostProcessor = request -> {
-            HttpHost proxy = new HttpHost("127.0.0.1", 8888, "http");
-            RequestConfig requestConfig = request.getConfig();
-            if (requestConfig == null) {
-                requestConfig = RequestConfig.DEFAULT;
-            }
-            requestConfig = RequestConfig.copy(requestConfig).setProxy(proxy).build();
-            request.setConfig(requestConfig);
+    public void withFiddler() {
+        RequestExecutor.configureHttpClient = builder -> {
+            HttpHost proxy = new HttpHost("http", "127.0.0.1", 8888);
+            builder.setRoutePlanner(new DefaultProxyRoutePlanner(proxy));
         };
-
-        return () -> RequestExecutor.requestPostProcessor = null;
     }
 }
