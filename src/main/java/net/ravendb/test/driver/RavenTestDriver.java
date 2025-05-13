@@ -252,8 +252,14 @@ public class RavenTestDriver implements CleanCloseable {
             }
         } else {
             Runtime runtime = Runtime.getRuntime();
+            String osName = System.getProperty("os.name").toLowerCase();
+            boolean isMacOs = osName.contains("mac") || osName.contains("darwin");
             try {
-                runtime.exec("xdg-open " + url);
+                if (isMacOs) {
+                    runtime.exec("open " + url);
+                } else {
+                    runtime.exec("xdg-open " + url);
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
