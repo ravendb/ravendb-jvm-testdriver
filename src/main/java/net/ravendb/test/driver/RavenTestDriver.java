@@ -1,6 +1,5 @@
 package net.ravendb.test.driver;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Stopwatch;
 import com.google.common.io.Files;
 import net.ravendb.client.Constants;
@@ -36,12 +35,10 @@ import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
 import org.apache.hc.core5.http.HttpHost;
 
-import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -221,6 +218,10 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     protected void waitForUserToContinueTheTest(IDocumentStore store) {
+        if (!isDebuggerAttached()) {
+            return;
+        }
+
         String databaseNameEncoded = UrlUtils.escapeDataString(store.getDatabase());
         String documentsPage = store.getUrls()[0] + "/studio/index.html#databases/documents?&database=" + databaseNameEncoded + "&withStop=true";
 
@@ -233,7 +234,9 @@ public class RavenTestDriver implements CleanCloseable {
             }
 
             try (IDocumentSession session = store.openSession()) {
-                if (session.load(ObjectNode.class, "Debug/Done") != null) {
+                if (session.advanced().exists("Debug/Done")) {
+                    session.delete("Debug/Done");
+                    session.saveChanges();
                     break;
                 }
             }
@@ -241,29 +244,45 @@ public class RavenTestDriver implements CleanCloseable {
         } while (true);
     }
 
+    /**
+     * There is no exact equivalent of .NET's Debugger.IsAttached on the JVM. The standard
+     * approximation is to look for the debug agent in the JVM startup arguments, which is what
+     * every IDE adds when it launches a test in debug mode.
+     */
+    private static boolean isDebuggerAttached() {
+        try {
+            for (String argument : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
+                if (argument.startsWith("-agentlib:jdwp") || argument.startsWith("-Xrunjdwp")) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            // the management interface is not always available, assume no debugger
+        }
+
+        return false;
+    }
+
     protected void openBrowser(String url) {
         System.out.println(url);
 
-        if (Desktop.isDesktopSupported()) {
-            Desktop desktop = Desktop.getDesktop();
-            try {
-                desktop.browse(new URI(url));
-            } catch (IOException | URISyntaxException e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            Runtime runtime = Runtime.getRuntime();
-            String osName = System.getProperty("os.name").toLowerCase();
-            boolean isMacOs = osName.contains("mac") || osName.contains("darwin");
-            try {
-                if (isMacOs) {
-                    runtime.exec("open " + url);
+        String osName = System.getProperty("os.name", "").toLowerCase();
+
+        try {
+            if (!osName.contains("win")) {
+                if (osName.contains("mac") || osName.contains("darwin")) {
+                    new ProcessBuilder("open", url).start();
                 } else {
-                    runtime.exec("xdg-open " + url);
+                    new ProcessBuilder("xdg-open", url).start();
                 }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+                return;
             }
+
+            // the Studio url contains '&', which cmd.exe would treat as a command separator,
+            // so both the window title and the url have to be passed pre-quoted
+            new ProcessBuilder("cmd", "/c", "start", "\"Stop & look at Studio\"", "\"" + url + "\"").start();
+        } catch (IOException e) {
+            throw new RuntimeException("Unable to open a browser for url: " + url, e);
         }
     }
 
