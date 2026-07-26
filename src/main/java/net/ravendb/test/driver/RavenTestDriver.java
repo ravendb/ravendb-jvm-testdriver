@@ -109,12 +109,18 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     protected IDocumentStore getDocumentStore(GetDocumentStoreOptions options, String database) {
-        database = ObjectUtils.firstNonNull(database, "test");
+        if (database == null) {
+            database = getCallerMemberName();
+        }
         options = ObjectUtils.firstNonNull(options, GetDocumentStoreOptions.INSTANCE);
         String name = database + "_" + _index.incrementAndGet();
         IDocumentStore documentStore = TEST_SERVER_STORE.getValue();
 
-        CreateDatabaseOperation createDatabaseOperation = new CreateDatabaseOperation(new DatabaseRecord(name));
+        DatabaseRecord databaseRecord = new DatabaseRecord(name);
+
+        preConfigureDatabase(databaseRecord);
+
+        CreateDatabaseOperation createDatabaseOperation = new CreateDatabaseOperation(databaseRecord);
         documentStore.maintenance().server().send(createDatabaseOperation);
 
         DocumentStore store = new DocumentStore(documentStore.getUrls(), name);
@@ -153,7 +159,58 @@ public class RavenTestDriver implements CleanCloseable {
         return store;
     }
 
+    /**
+     * Names the test database after the method that asked for the document store, the way
+     * [CallerMemberName] does on the C# side. Java has no such compiler support, so the
+     * immediate caller is taken from the stack: the first frame that no longer belongs to
+     * this class.
+     */
+    private String getCallerMemberName() {
+        String driverClassName = RavenTestDriver.class.getName();
+        boolean insideDriver = false;
+
+        for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
+            if (driverClassName.equals(element.getClassName())) {
+                insideDriver = true;
+                continue;
+            }
+
+            if (!insideDriver) {
+                continue;
+            }
+
+            String methodName = element.getMethodName();
+            if ("<init>".equals(methodName)) {
+                return toDatabaseName(getTypeName() + "_ctor");
+            }
+            if ("<clinit>".equals(methodName)) {
+                return toDatabaseName(getTypeName() + "_cctor");
+            }
+
+            return toDatabaseName(methodName);
+        }
+
+        return "test";
+    }
+
+    private String getTypeName() {
+        String typeName = getClass().getSimpleName();
+        return typeName.isEmpty() ? getClass().getName() : typeName;
+    }
+
+    /**
+     * Synthetic member names (lambdas, anonymous classes) contain characters a database name
+     * cannot hold, so anything outside the allowed set is replaced.
+     */
+    private static String toDatabaseName(String memberName) {
+        return memberName.replaceAll("[^A-Za-z0-9_\\-.]", "_");
+    }
+
     protected void preInitialize(IDocumentStore documentStore) {
+        // empty by design
+    }
+
+    protected void preConfigureDatabase(DatabaseRecord databaseRecord) {
         // empty by design
     }
 
