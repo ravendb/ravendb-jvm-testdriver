@@ -13,6 +13,7 @@ import net.ravendb.client.documents.operations.DatabaseStatistics;
 import net.ravendb.client.documents.operations.GetStatisticsOperation;
 import net.ravendb.client.documents.operations.IndexInformation;
 import net.ravendb.client.documents.operations.MaintenanceOperationExecutor;
+import net.ravendb.client.documents.operations.Operation;
 import net.ravendb.client.documents.operations.indexes.GetIndexErrorsOperation;
 import net.ravendb.client.documents.session.IDocumentSession;
 import net.ravendb.client.documents.smuggler.DatabaseSmugglerImportOptions;
@@ -127,7 +128,7 @@ public class RavenTestDriver implements CleanCloseable {
         store.addAfterCloseListener((sender, event) -> {
             Boolean value = _documentStores.remove(store);
 
-            if (!value) {
+            if (!Boolean.TRUE.equals(value)) {
                 return;
             }
 
@@ -282,6 +283,15 @@ public class RavenTestDriver implements CleanCloseable {
             }
         }
 
+        InputStream databaseDumpFileStream = getDatabaseDumpFileStream();
+        if (databaseDumpFileStream != null) {
+            try {
+                databaseDumpFileStream.close();
+            } catch (Exception e) {
+                exceptions.add(e);
+            }
+        }
+
         disposed = true;
 
         if (onDriverClosed != null) {
@@ -289,9 +299,19 @@ public class RavenTestDriver implements CleanCloseable {
         }
 
         if (exceptions.size() > 0) {
-            throw new RuntimeException(exceptions.stream()
-                    .map(x -> x.toString()).collect(Collectors.joining(", ")));
+            throw aggregate(exceptions);
         }
+    }
+
+    private static RuntimeException aggregate(List<Exception> exceptions) {
+        RuntimeException aggregated = new RuntimeException(exceptions.stream()
+                .map(x -> x.toString()).collect(Collectors.joining(", ")), exceptions.get(0));
+
+        for (int i = 1; i < exceptions.size(); i++) {
+            aggregated.addSuppressed(exceptions.get(i));
+        }
+
+        return aggregated;
     }
 
     private static void cleanupTempDirs(File... dirs) {
@@ -344,11 +364,13 @@ public class RavenTestDriver implements CleanCloseable {
     private void importDatabase(DocumentStore docStore, String database) throws IOException {
         DatabaseSmugglerImportOptions options = new DatabaseSmugglerImportOptions();
         if (getDatabaseDumpFilePath() != null) {
-            docStore.smuggler().forDatabase(database)
+            Operation operation = docStore.smuggler().forDatabase(database)
                     .importAsync(options, getDatabaseDumpFilePath());
+            operation.waitForCompletion();
         } else if (getDatabaseDumpFileStream() != null) {
-            docStore.smuggler().forDatabase(database)
+            Operation operation = docStore.smuggler().forDatabase(database)
                     .importAsync(options, getDatabaseDumpFileStream());
+            operation.waitForCompletion();
         }
     }
 
