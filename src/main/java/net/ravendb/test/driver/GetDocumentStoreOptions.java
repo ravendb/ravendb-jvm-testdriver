@@ -1,10 +1,16 @@
 package net.ravendb.test.driver;
 
+import net.ravendb.client.documents.Lazy;
+
 import java.time.Duration;
 
 @SuppressWarnings({"WeakerAccess", "unused"})
 public class GetDocumentStoreOptions {
-    static GetDocumentStoreOptions INSTANCE = new GetDocumentStoreOptions();
+    private static final Lazy<GetDocumentStoreOptions> DEFAULT = new Lazy<>(() -> new GetDocumentStoreOptions());
+
+    static GetDocumentStoreOptions getDefault() {
+        return DEFAULT.getValue();
+    }
 
     private Duration waitForIndexingTimeout;
 

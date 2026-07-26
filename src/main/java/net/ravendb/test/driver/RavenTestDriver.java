@@ -22,6 +22,7 @@ import net.ravendb.client.exceptions.cluster.NoLeaderException;
 import net.ravendb.client.exceptions.database.DatabaseDoesNotExistException;
 import net.ravendb.client.http.RequestExecutor;
 import net.ravendb.client.primitives.CleanCloseable;
+import net.ravendb.client.primitives.EventHelper;
 import net.ravendb.client.serverwide.DatabaseRecord;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import net.ravendb.client.serverwide.operations.DeleteDatabasesOperation;
@@ -49,7 +50,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -63,6 +63,7 @@ public class RavenTestDriver implements CleanCloseable {
 
     private static AtomicInteger _index = new AtomicInteger(0);
     private static ServerOptions _globalServerOptions;
+    private static volatile RuntimeException _serverStartupFailure;
 
     private static File _emptySettingsFile;
 
@@ -112,7 +113,7 @@ public class RavenTestDriver implements CleanCloseable {
         if (database == null) {
             database = getCallerMemberName();
         }
-        options = ObjectUtils.firstNonNull(options, GetDocumentStoreOptions.INSTANCE);
+        options = ObjectUtils.firstNonNull(options, GetDocumentStoreOptions.getDefault());
         String name = database + "_" + _index.incrementAndGet();
         IDocumentStore documentStore = TEST_SERVER_STORE.getValue();
 
@@ -220,6 +221,29 @@ public class RavenTestDriver implements CleanCloseable {
 
     protected Consumer<RavenTestDriver> onDriverClosed = (driver) -> {};
 
+    private final List<Consumer<RavenTestDriver>> onDriverClosedListeners = new ArrayList<>();
+
+    /**
+     * Registers a listener notified when this driver is closed. Unlike the single assignable
+     * {@link #onDriverClosed} field, any number of listeners can be registered - this is the
+     * equivalent of the multicast DriverDisposed event on the C# side.
+     * @param listener listener to add
+     */
+    public void addDriverClosedListener(Consumer<RavenTestDriver> listener) {
+        onDriverClosedListeners.add(listener);
+    }
+
+    /**
+     * @param listener listener to remove
+     */
+    public void removeDriverClosedListener(Consumer<RavenTestDriver> listener) {
+        onDriverClosedListeners.remove(listener);
+    }
+
+    public boolean isDisposed() {
+        return disposed;
+    }
+
 
     public static void waitForIndexing(IDocumentStore store) {
         waitForIndexing(store, null, null);
@@ -262,16 +286,25 @@ public class RavenTestDriver implements CleanCloseable {
         }
 
         IndexErrors[] errors = admin.send(new GetIndexErrorsOperation());
+
         String allIndexErrorsText = "";
-        Function<IndexErrors, String> formatIndexErrors = indexErrors -> {
-            String errorsListText = Arrays.stream(indexErrors.getErrors()).map(x -> "-" + x).collect(Collectors.joining(System.lineSeparator()));
-            return "Index " + indexErrors.getName() + " (" + indexErrors.getErrors().length + " errors): "+ System.lineSeparator() + errorsListText;
-        };
         if (errors != null && errors.length > 0) {
-            allIndexErrorsText = Arrays.stream(errors).map(formatIndexErrors).collect(Collectors.joining(System.lineSeparator()));
+            String allIndexErrorsListText = Arrays.stream(errors)
+                    .map(RavenTestDriver::formatIndexErrors)
+                    .collect(Collectors.joining(System.lineSeparator()));
+            allIndexErrorsText = "Indexing errors:" + System.lineSeparator() + allIndexErrorsListText;
         }
 
         throw new TimeoutException("The indexes stayed stale for more than " + timeout + "." + allIndexErrorsText);
+    }
+
+    private static String formatIndexErrors(IndexErrors indexErrors) {
+        String errorsListText = Arrays.stream(indexErrors.getErrors())
+                .map(x -> "- " + x)
+                .collect(Collectors.joining(System.lineSeparator()));
+
+        return "Index '" + indexErrors.getName() + "' (" + indexErrors.getErrors().length + " errors):"
+                + System.lineSeparator() + errorsListText;
     }
 
     protected void waitForUserToContinueTheTest(IDocumentStore store) {
@@ -374,6 +407,8 @@ public class RavenTestDriver implements CleanCloseable {
             onDriverClosed.accept(this);
         }
 
+        EventHelper.invoke(onDriverClosedListeners, this);
+
         if (exceptions.size() > 0) {
             throw aggregate(exceptions);
         }
@@ -451,14 +486,23 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     private static IDocumentStore runServer() {
+        // the client's Lazy only remembers successful values, so without this a failed startup
+        // would be retried by every test - re-inserting the test arguments into the same options
+        // and hiding the root cause behind 'The server was already started'
+        RuntimeException startupFailure = _serverStartupFailure;
+        if (startupFailure != null) {
+            throw new RavenException("Unable to start server: " + startupFailure.getMessage(), startupFailure);
+        }
+
         try {
             ServerOptions options = ObjectUtils.firstNonNull(_globalServerOptions, serverOptions.get());
 
-            List<String> commandLineArgs = options.getCommandLineArgs();
-
-            commandLineArgs.add(0,"-c");
-            commandLineArgs.add(1, CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            List<String> commandLineArgs = new ArrayList<>();
+            commandLineArgs.add("-c");
+            commandLineArgs.add(CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            commandLineArgs.addAll(options.getCommandLineArgs());
             commandLineArgs.add("--RunInMemory=true");
+            options.setCommandLineArgs(commandLineArgs);
 
             TEST_SERVER.startServer(options);
 
@@ -470,7 +514,11 @@ public class RavenTestDriver implements CleanCloseable {
 
             return store;
         } catch (IOException e) {
-            throw new RavenException("Unable to start server: " + e.getMessage(), e);
+            _serverStartupFailure = new RavenException("Unable to start server: " + e.getMessage(), e);
+            throw _serverStartupFailure;
+        } catch (RuntimeException e) {
+            _serverStartupFailure = e;
+            throw e;
         }
     }
 
