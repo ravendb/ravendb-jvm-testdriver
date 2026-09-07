@@ -1,6 +1,5 @@
 package net.ravendb.test.driver;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Stopwatch;
 import com.google.common.io.Files;
 import net.ravendb.client.Constants;
@@ -13,6 +12,7 @@ import net.ravendb.client.documents.operations.DatabaseStatistics;
 import net.ravendb.client.documents.operations.GetStatisticsOperation;
 import net.ravendb.client.documents.operations.IndexInformation;
 import net.ravendb.client.documents.operations.MaintenanceOperationExecutor;
+import net.ravendb.client.documents.operations.Operation;
 import net.ravendb.client.documents.operations.indexes.GetIndexErrorsOperation;
 import net.ravendb.client.documents.session.IDocumentSession;
 import net.ravendb.client.documents.smuggler.DatabaseSmugglerImportOptions;
@@ -22,6 +22,7 @@ import net.ravendb.client.exceptions.cluster.NoLeaderException;
 import net.ravendb.client.exceptions.database.DatabaseDoesNotExistException;
 import net.ravendb.client.http.RequestExecutor;
 import net.ravendb.client.primitives.CleanCloseable;
+import net.ravendb.client.primitives.EventHelper;
 import net.ravendb.client.serverwide.DatabaseRecord;
 import net.ravendb.client.serverwide.operations.CreateDatabaseOperation;
 import net.ravendb.client.serverwide.operations.DeleteDatabasesOperation;
@@ -35,12 +36,10 @@ import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
 import org.apache.hc.core5.http.HttpHost;
 
-import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -51,7 +50,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -65,6 +63,7 @@ public class RavenTestDriver implements CleanCloseable {
 
     private static AtomicInteger _index = new AtomicInteger(0);
     private static ServerOptions _globalServerOptions;
+    private static volatile RuntimeException _serverStartupFailure;
 
     private static File _emptySettingsFile;
 
@@ -111,12 +110,18 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     protected IDocumentStore getDocumentStore(GetDocumentStoreOptions options, String database) {
-        database = ObjectUtils.firstNonNull(database, "test");
-        options = ObjectUtils.firstNonNull(options, GetDocumentStoreOptions.INSTANCE);
+        if (database == null) {
+            database = getCallerMemberName();
+        }
+        options = ObjectUtils.firstNonNull(options, GetDocumentStoreOptions.getDefault());
         String name = database + "_" + _index.incrementAndGet();
         IDocumentStore documentStore = TEST_SERVER_STORE.getValue();
 
-        CreateDatabaseOperation createDatabaseOperation = new CreateDatabaseOperation(new DatabaseRecord(name));
+        DatabaseRecord databaseRecord = new DatabaseRecord(name);
+
+        preConfigureDatabase(databaseRecord);
+
+        CreateDatabaseOperation createDatabaseOperation = new CreateDatabaseOperation(databaseRecord);
         documentStore.maintenance().server().send(createDatabaseOperation);
 
         DocumentStore store = new DocumentStore(documentStore.getUrls(), name);
@@ -127,7 +132,7 @@ public class RavenTestDriver implements CleanCloseable {
         store.addAfterCloseListener((sender, event) -> {
             Boolean value = _documentStores.remove(store);
 
-            if (!value) {
+            if (!Boolean.TRUE.equals(value)) {
                 return;
             }
 
@@ -155,7 +160,58 @@ public class RavenTestDriver implements CleanCloseable {
         return store;
     }
 
+    /**
+     * Names the test database after the method that asked for the document store, the way
+     * [CallerMemberName] does on the C# side. Java has no such compiler support, so the
+     * immediate caller is taken from the stack: the first frame that no longer belongs to
+     * this class.
+     */
+    private String getCallerMemberName() {
+        String driverClassName = RavenTestDriver.class.getName();
+        boolean insideDriver = false;
+
+        for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
+            if (driverClassName.equals(element.getClassName())) {
+                insideDriver = true;
+                continue;
+            }
+
+            if (!insideDriver) {
+                continue;
+            }
+
+            String methodName = element.getMethodName();
+            if ("<init>".equals(methodName)) {
+                return toDatabaseName(getTypeName() + "_ctor");
+            }
+            if ("<clinit>".equals(methodName)) {
+                return toDatabaseName(getTypeName() + "_cctor");
+            }
+
+            return toDatabaseName(methodName);
+        }
+
+        return "test";
+    }
+
+    private String getTypeName() {
+        String typeName = getClass().getSimpleName();
+        return typeName.isEmpty() ? getClass().getName() : typeName;
+    }
+
+    /**
+     * Synthetic member names (lambdas, anonymous classes) contain characters a database name
+     * cannot hold, so anything outside the allowed set is replaced.
+     */
+    private static String toDatabaseName(String memberName) {
+        return memberName.replaceAll("[^A-Za-z0-9_\\-.]", "_");
+    }
+
     protected void preInitialize(IDocumentStore documentStore) {
+        // empty by design
+    }
+
+    protected void preConfigureDatabase(DatabaseRecord databaseRecord) {
         // empty by design
     }
 
@@ -164,6 +220,29 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     protected Consumer<RavenTestDriver> onDriverClosed = (driver) -> {};
+
+    private final List<Consumer<RavenTestDriver>> onDriverClosedListeners = new ArrayList<>();
+
+    /**
+     * Registers a listener notified when this driver is closed. Unlike the single assignable
+     * {@link #onDriverClosed} field, any number of listeners can be registered - this is the
+     * equivalent of the multicast DriverDisposed event on the C# side.
+     * @param listener listener to add
+     */
+    public void addDriverClosedListener(Consumer<RavenTestDriver> listener) {
+        onDriverClosedListeners.add(listener);
+    }
+
+    /**
+     * @param listener listener to remove
+     */
+    public void removeDriverClosedListener(Consumer<RavenTestDriver> listener) {
+        onDriverClosedListeners.remove(listener);
+    }
+
+    public boolean isDisposed() {
+        return disposed;
+    }
 
 
     public static void waitForIndexing(IDocumentStore store) {
@@ -207,19 +286,32 @@ public class RavenTestDriver implements CleanCloseable {
         }
 
         IndexErrors[] errors = admin.send(new GetIndexErrorsOperation());
+
         String allIndexErrorsText = "";
-        Function<IndexErrors, String> formatIndexErrors = indexErrors -> {
-            String errorsListText = Arrays.stream(indexErrors.getErrors()).map(x -> "-" + x).collect(Collectors.joining(System.lineSeparator()));
-            return "Index " + indexErrors.getName() + " (" + indexErrors.getErrors().length + " errors): "+ System.lineSeparator() + errorsListText;
-        };
         if (errors != null && errors.length > 0) {
-            allIndexErrorsText = Arrays.stream(errors).map(formatIndexErrors).collect(Collectors.joining(System.lineSeparator()));
+            String allIndexErrorsListText = Arrays.stream(errors)
+                    .map(RavenTestDriver::formatIndexErrors)
+                    .collect(Collectors.joining(System.lineSeparator()));
+            allIndexErrorsText = "Indexing errors:" + System.lineSeparator() + allIndexErrorsListText;
         }
 
         throw new TimeoutException("The indexes stayed stale for more than " + timeout + "." + allIndexErrorsText);
     }
 
+    private static String formatIndexErrors(IndexErrors indexErrors) {
+        String errorsListText = Arrays.stream(indexErrors.getErrors())
+                .map(x -> "- " + x)
+                .collect(Collectors.joining(System.lineSeparator()));
+
+        return "Index '" + indexErrors.getName() + "' (" + indexErrors.getErrors().length + " errors):"
+                + System.lineSeparator() + errorsListText;
+    }
+
     protected void waitForUserToContinueTheTest(IDocumentStore store) {
+        if (!isDebuggerAttached()) {
+            return;
+        }
+
         String databaseNameEncoded = UrlUtils.escapeDataString(store.getDatabase());
         String documentsPage = store.getUrls()[0] + "/studio/index.html#databases/documents?&database=" + databaseNameEncoded + "&withStop=true";
 
@@ -232,7 +324,9 @@ public class RavenTestDriver implements CleanCloseable {
             }
 
             try (IDocumentSession session = store.openSession()) {
-                if (session.load(ObjectNode.class, "Debug/Done") != null) {
+                if (session.advanced().exists("Debug/Done")) {
+                    session.delete("Debug/Done");
+                    session.saveChanges();
                     break;
                 }
             }
@@ -240,29 +334,45 @@ public class RavenTestDriver implements CleanCloseable {
         } while (true);
     }
 
+    /**
+     * There is no exact equivalent of .NET's Debugger.IsAttached on the JVM. The standard
+     * approximation is to look for the debug agent in the JVM startup arguments, which is what
+     * every IDE adds when it launches a test in debug mode.
+     */
+    private static boolean isDebuggerAttached() {
+        try {
+            for (String argument : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
+                if (argument.startsWith("-agentlib:jdwp") || argument.startsWith("-Xrunjdwp")) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            // the management interface is not always available, assume no debugger
+        }
+
+        return false;
+    }
+
     protected void openBrowser(String url) {
         System.out.println(url);
 
-        if (Desktop.isDesktopSupported()) {
-            Desktop desktop = Desktop.getDesktop();
-            try {
-                desktop.browse(new URI(url));
-            } catch (IOException | URISyntaxException e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            Runtime runtime = Runtime.getRuntime();
-            String osName = System.getProperty("os.name").toLowerCase();
-            boolean isMacOs = osName.contains("mac") || osName.contains("darwin");
-            try {
-                if (isMacOs) {
-                    runtime.exec("open " + url);
+        String osName = System.getProperty("os.name", "").toLowerCase();
+
+        try {
+            if (!osName.contains("win")) {
+                if (osName.contains("mac") || osName.contains("darwin")) {
+                    new ProcessBuilder("open", url).start();
                 } else {
-                    runtime.exec("xdg-open " + url);
+                    new ProcessBuilder("xdg-open", url).start();
                 }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+                return;
             }
+
+            // the Studio url contains '&', which cmd.exe would treat as a command separator,
+            // so both the window title and the url have to be passed pre-quoted
+            new ProcessBuilder("cmd", "/c", "start", "\"Stop & look at Studio\"", "\"" + url + "\"").start();
+        } catch (IOException e) {
+            throw new RuntimeException("Unable to open a browser for url: " + url, e);
         }
     }
 
@@ -282,16 +392,37 @@ public class RavenTestDriver implements CleanCloseable {
             }
         }
 
+        InputStream databaseDumpFileStream = getDatabaseDumpFileStream();
+        if (databaseDumpFileStream != null) {
+            try {
+                databaseDumpFileStream.close();
+            } catch (Exception e) {
+                exceptions.add(e);
+            }
+        }
+
         disposed = true;
 
         if (onDriverClosed != null) {
             onDriverClosed.accept(this);
         }
 
+        EventHelper.invoke(onDriverClosedListeners, this);
+
         if (exceptions.size() > 0) {
-            throw new RuntimeException(exceptions.stream()
-                    .map(x -> x.toString()).collect(Collectors.joining(", ")));
+            throw aggregate(exceptions);
         }
+    }
+
+    private static RuntimeException aggregate(List<Exception> exceptions) {
+        RuntimeException aggregated = new RuntimeException(exceptions.stream()
+                .map(x -> x.toString()).collect(Collectors.joining(", ")), exceptions.get(0));
+
+        for (int i = 1; i < exceptions.size(); i++) {
+            aggregated.addSuppressed(exceptions.get(i));
+        }
+
+        return aggregated;
     }
 
     private static void cleanupTempDirs(File... dirs) {
@@ -344,23 +475,34 @@ public class RavenTestDriver implements CleanCloseable {
     private void importDatabase(DocumentStore docStore, String database) throws IOException {
         DatabaseSmugglerImportOptions options = new DatabaseSmugglerImportOptions();
         if (getDatabaseDumpFilePath() != null) {
-            docStore.smuggler().forDatabase(database)
+            Operation operation = docStore.smuggler().forDatabase(database)
                     .importAsync(options, getDatabaseDumpFilePath());
+            operation.waitForCompletion();
         } else if (getDatabaseDumpFileStream() != null) {
-            docStore.smuggler().forDatabase(database)
+            Operation operation = docStore.smuggler().forDatabase(database)
                     .importAsync(options, getDatabaseDumpFileStream());
+            operation.waitForCompletion();
         }
     }
 
     private static IDocumentStore runServer() {
+        // the client's Lazy only remembers successful values, so without this a failed startup
+        // would be retried by every test - re-inserting the test arguments into the same options
+        // and hiding the root cause behind 'The server was already started'
+        RuntimeException startupFailure = _serverStartupFailure;
+        if (startupFailure != null) {
+            throw new RavenException("Unable to start server: " + startupFailure.getMessage(), startupFailure);
+        }
+
         try {
             ServerOptions options = ObjectUtils.firstNonNull(_globalServerOptions, serverOptions.get());
 
-            List<String> commandLineArgs = options.getCommandLineArgs();
-
-            commandLineArgs.add(0,"-c");
-            commandLineArgs.add(1, CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            List<String> commandLineArgs = new ArrayList<>();
+            commandLineArgs.add("-c");
+            commandLineArgs.add(CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            commandLineArgs.addAll(options.getCommandLineArgs());
             commandLineArgs.add("--RunInMemory=true");
+            options.setCommandLineArgs(commandLineArgs);
 
             TEST_SERVER.startServer(options);
 
@@ -372,7 +514,11 @@ public class RavenTestDriver implements CleanCloseable {
 
             return store;
         } catch (IOException e) {
-            throw new RavenException("Unable to start server: " + e.getMessage(), e);
+            _serverStartupFailure = new RavenException("Unable to start server: " + e.getMessage(), e);
+            throw _serverStartupFailure;
+        } catch (RuntimeException e) {
+            _serverStartupFailure = e;
+            throw e;
         }
     }
 
