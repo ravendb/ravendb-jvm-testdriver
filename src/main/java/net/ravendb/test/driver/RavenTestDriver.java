@@ -418,7 +418,32 @@ public class RavenTestDriver implements CleanCloseable {
             allIndexErrorsText = "Indexing errors:\r\n" + allIndexErrorsListText;
         }
 
-        throw new TimeoutException("The indexes stayed stale for more than " + timeout + "." + allIndexErrorsText);
+        throw new TimeoutException("The indexes stayed stale for more than " + formatTimeSpan(timeout) + "." + allIndexErrorsText);
+    }
+
+    /**
+     * Formats a duration the way .NET's TimeSpan.ToString() does: {@code [-][d.]hh:mm:ss[.fffffff]}.
+     */
+    static String formatTimeSpan(Duration duration) {
+        StringBuilder sb = new StringBuilder();
+        if (duration.isNegative()) {
+            sb.append('-');
+            duration = duration.negated();
+        }
+
+        long seconds = duration.getSeconds();
+        long days = seconds / 86400;
+        if (days > 0) {
+            sb.append(days).append('.');
+        }
+        sb.append(String.format("%02d:%02d:%02d", (seconds / 3600) % 24, (seconds / 60) % 60, seconds % 60));
+
+        long ticks = duration.getNano() / 100;
+        if (ticks > 0) {
+            sb.append(String.format(".%07d", ticks));
+        }
+
+        return sb.toString();
     }
 
     private static String formatIndexErrors(IndexErrors indexErrors) {

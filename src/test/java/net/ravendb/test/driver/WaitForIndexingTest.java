@@ -26,7 +26,7 @@ public class WaitForIndexingTest extends RavenTestDriver {
 
     private static final String BY_NAME = "People/ByName";
     private static final String BY_NAME_MAP = "from p in docs.People select new { p.name }";
-    private static final String STALE_BY_NAME_MESSAGE = "The indexes stayed stale for more than PT1S."
+    private static final String STALE_BY_NAME_MESSAGE = "The indexes stayed stale for more than 00:00:01."
             + "Indexing errors:\r\nIndex '" + BY_NAME + "' (0 errors):\r\n";
     private static final String FAULTY = "People/Faulty";
     private static final String FAULTY_MAP = "from p in docs.People select new { Number = 1 / (p.name.Length - p.name.Length) }";
@@ -88,7 +88,7 @@ public class WaitForIndexingTest extends RavenTestDriver {
                     .isLessThan(10);
             assertThat(thrown)
                     .isInstanceOf(TimeoutException.class)
-                    .hasMessageStartingWith("The indexes stayed stale for more than PT30S.Indexing errors:\r\n")
+                    .hasMessageStartingWith("The indexes stayed stale for more than 00:00:30.Indexing errors:\r\n")
                     .hasMessageContaining("Index '" + FAULTY + "' (1 errors):\r\n- ");
         }
     }
