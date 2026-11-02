@@ -322,12 +322,20 @@ public class RavenTestDriver implements CleanCloseable {
         onDriverClosedListeners.remove(listener);
     }
 
+    // TODO next major version: change the waitForIndexing overloads from 'public static' to 'protected'
+    //  instance methods (mirroring C#'s 'protected void WaitForIndexing') and drop @Deprecated.
+    //  No replacement is offered meanwhile: Java can't declare an instance method next to a static
+    //  one with the same signature.
+
     /**
+     * Waits until all non-disabled indexes of the store's database are up to date.
+     *
      * @param store store to wait on
-     * @deprecated In the next major version this becomes a {@code protected} instance method, mirroring the
+     * @deprecated in the next major version this becomes a {@code protected} instance method, mirroring the
      * C# test driver. Calls made from a {@link RavenTestDriver} subclass ({@code waitForIndexing(store)})
-     * will keep compiling unchanged; calls through the class from elsewhere
-     * ({@code RavenTestDriver.waitForIndexing(store)}) will not.
+     * will keep compiling unchanged. Calls through the class from elsewhere
+     * ({@code RavenTestDriver.waitForIndexing(store)}) will not - move them into a {@link RavenTestDriver}
+     * subclass.
      */
     @Deprecated
     public static void waitForIndexing(IDocumentStore store) {
@@ -335,9 +343,12 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     /**
+     * Waits until all non-disabled indexes of the given database are up to date.
+     *
      * @param store    store to wait on
      * @param database database to wait on, or null for the store's database
-     * @deprecated see {@link #waitForIndexing(IDocumentStore)}.
+     * @deprecated becomes a {@code protected} instance method in the next major version, see
+     * {@link #waitForIndexing(IDocumentStore)}.
      */
     @Deprecated
     public static void waitForIndexing(IDocumentStore store, String database) {
@@ -345,10 +356,13 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     /**
+     * Waits until all non-disabled indexes of the given database are up to date.
+     *
      * @param store    store to wait on
      * @param database database to wait on, or null for the store's database
      * @param timeout  how long to wait, or null for one minute
-     * @deprecated see {@link #waitForIndexing(IDocumentStore)}.
+     * @deprecated becomes a {@code protected} instance method in the next major version, see
+     * {@link #waitForIndexing(IDocumentStore)}.
      */
     @Deprecated
     public static void waitForIndexing(IDocumentStore store, String database, Duration timeout) {
@@ -422,7 +436,9 @@ public class RavenTestDriver implements CleanCloseable {
         do {
             try {
                 Thread.sleep(500);
-            } catch (InterruptedException ignored) {
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
             }
 
             try (IDocumentSession session = store.openSession()) {
@@ -436,20 +452,50 @@ public class RavenTestDriver implements CleanCloseable {
         } while (true);
     }
 
-    /**
-     * There is no exact equivalent of .NET's Debugger.IsAttached on the JVM. The standard
-     * approximation is to look for the debug agent in the JVM startup arguments, which is what
-     * every IDE adds when it launches a test in debug mode.
-     */
     private static boolean isDebuggerAttached() {
         try {
-            for (String argument : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
-                if (argument.startsWith("-agentlib:jdwp") || argument.startsWith("-Xrunjdwp")) {
-                    return true;
-                }
-            }
+            return isDebuggerAttached(ManagementFactory.getRuntimeMXBean().getInputArguments());
         } catch (Exception e) {
             // the management interface is not always available, assume no debugger
+            return false;
+        }
+    }
+
+    /**
+     * A loaded jdwp agent alone does not mean a debugger is attached: {@code server=y,suspend=n} (the
+     * usual "remote debugging enabled" setup of CI agents and containers) only listens, and the JVM runs
+     * whether anyone connects or not. Every other mode implies a debugger was attached at startup:
+     * <ul>
+     *     <li>{@code server=n} (the default, used by IntelliJ, Eclipse and VS Code) - the JVM connects
+     *     to the debugger and fails to start if it can't</li>
+     *     <li>{@code suspend=y} (the default) - the JVM waits for a debugger before running any code</li>
+     * </ul>
+     * A debugger attached later to a {@code server=y,suspend=n} JVM is not detected.
+     */
+    static boolean isDebuggerAttached(List<String> jvmArguments) {
+        for (String argument : jvmArguments) {
+            String agentOptions;
+            if (argument.startsWith("-agentlib:jdwp")) {
+                agentOptions = argument.substring("-agentlib:jdwp".length());
+            } else if (argument.startsWith("-Xrunjdwp")) {
+                agentOptions = argument.substring("-Xrunjdwp".length());
+            } else {
+                continue;
+            }
+
+            String server = "n";
+            String suspend = "y";
+            for (String option : agentOptions.replaceFirst("^[=:]", "").split(",")) {
+                if (option.startsWith("server=")) {
+                    server = option.substring("server=".length());
+                } else if (option.startsWith("suspend=")) {
+                    suspend = option.substring("suspend=".length());
+                }
+            }
+
+            if (!"y".equals(server) || !"n".equals(suspend)) {
+                return true;
+            }
         }
 
         return false;
