@@ -68,6 +68,7 @@ public class RavenTestDriver implements CleanCloseable {
     private EmbeddedServer _scopedServer;
     private ServerOptions _scopedServerOptions;
     private final FailureCachingLazy<IDocumentStore> _scopedDocumentStore = new FailureCachingLazy<>(() -> createScopedDocumentStore());
+    private File _scopedServerLocation;
 
     private static File _emptySettingsFile;
 
@@ -169,8 +170,13 @@ public class RavenTestDriver implements CleanCloseable {
             } finally {
                 _scopedServer = null;
                 _scopedServerOptions = null;
+                deleteScopedServerLocation();
             }
         };
+    }
+
+    File getScopedServerLocation() {
+        return _scopedServerLocation;
     }
 
     protected IDocumentStore getDocumentStore() {
@@ -556,6 +562,8 @@ public class RavenTestDriver implements CleanCloseable {
             }
         }
 
+        deleteScopedServerLocation();
+
         InputStream databaseDumpFileStream = getDatabaseDumpFileStream();
         if (databaseDumpFileStream != null) {
             try {
@@ -655,8 +663,28 @@ public class RavenTestDriver implements CleanCloseable {
     }
 
     private IDocumentStore createScopedDocumentStore() {
-        return startAndConnect(_scopedServer,
-                ObjectUtils.firstNonNull(_scopedServerOptions, _globalServerOptions, serverOptions.get()));
+        ServerOptions options = ObjectUtils.firstNonNull(_scopedServerOptions, _globalServerOptions, serverOptions.get());
+
+        try {
+            _scopedServerLocation = java.nio.file.Files.createTempDirectory("ravendb-scoped-server-").toFile();
+        } catch (IOException e) {
+            throw new RavenException("Unable to start server: " + e.getMessage(), e);
+        }
+
+        String targetServerLocation = options.getTargetServerLocation();
+        options.setTargetServerLocation(_scopedServerLocation.getAbsolutePath());
+        try {
+            return startAndConnect(_scopedServer, options);
+        } finally {
+            options.setTargetServerLocation(targetServerLocation);
+        }
+    }
+
+    private void deleteScopedServerLocation() {
+        if (_scopedServerLocation != null) {
+            cleanupTempDirs(_scopedServerLocation);
+            _scopedServerLocation = null;
+        }
     }
 
     /**
@@ -664,15 +692,21 @@ public class RavenTestDriver implements CleanCloseable {
      * shipped settings.json and running in memory - and connects a store to it.
      */
     private static IDocumentStore startAndConnect(EmbeddedServer server, ServerOptions options) {
-        List<String> commandLineArgs = new ArrayList<>();
-        commandLineArgs.add("-c");
+        String settingsFile;
         try {
-            commandLineArgs.add(CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath()));
+            settingsFile = CommandLineArgumentEscaper.escapeSingleArg(getEmptySettingsFile().getAbsolutePath());
         } catch (IOException e) {
             throw new RavenException("Unable to start server: " + e.getMessage(), e);
         }
-        commandLineArgs.addAll(options.getCommandLineArgs());
-        commandLineArgs.add("--RunInMemory=true");
+
+        List<String> commandLineArgs = new ArrayList<>(options.getCommandLineArgs());
+        if (commandLineArgs.size() < 2 || !"-c".equals(commandLineArgs.get(0)) || !settingsFile.equals(commandLineArgs.get(1))) {
+            commandLineArgs.add(0, "-c");
+            commandLineArgs.add(1, settingsFile);
+        }
+        if (!commandLineArgs.contains("--RunInMemory=true")) {
+            commandLineArgs.add("--RunInMemory=true");
+        }
         options.setCommandLineArgs(commandLineArgs);
 
         server.startServer(options);

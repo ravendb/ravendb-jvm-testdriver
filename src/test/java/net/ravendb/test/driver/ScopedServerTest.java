@@ -95,6 +95,59 @@ public class ScopedServerTest extends RavenTestDriver {
     }
 
     @Test
+    public void scopedServersSharingTheServerLocationRunSideBySide() {
+        // the default TargetServerLocation is left untouched - every live server must still get its own
+        // copy of the binaries, or extracting into the folder of a running server fails on locked files
+        TestServerOptions options = new TestServerOptions();
+        options.setDataDirectory(tempDir().getAbsolutePath());
+        options.setLogsPath(tempDir().getAbsolutePath());
+        String sharedLocation = options.getTargetServerLocation();
+
+        try (RavenTestDriver first = new RavenTestDriver();
+             CleanCloseable firstScope = first.configureScopedServer(options);
+             IDocumentStore firstStore = first.getDocumentStore();
+             RavenTestDriver second = new RavenTestDriver();
+             CleanCloseable secondScope = second.configureScopedServer(options);
+             IDocumentStore secondStore = second.getDocumentStore()) {
+
+            assertThat(secondStore.getUrls()).isNotEqualTo(firstStore.getUrls());
+        }
+
+        assertThat(options.getTargetServerLocation())
+                .as("the caller's options must keep their server location")
+                .isEqualTo(sharedLocation);
+    }
+
+    @Test
+    public void scopedServerLocationIsDeletedOnClose() {
+        try (RavenTestDriver driver = new RavenTestDriver()) {
+            CleanCloseable scope = driver.configureScopedServer(scopedOptions());
+            driver.getDocumentStore().close();
+            File location = driver.getScopedServerLocation();
+            assertThat(location).isDirectory();
+
+            scope.close();
+
+            assertThat(location).doesNotExist();
+        }
+    }
+
+    @Test
+    public void reusedOptionsDoNotRepeatTheTestArguments() {
+        TestServerOptions options = scopedOptions();
+
+        try (RavenTestDriver first = new RavenTestDriver();
+             CleanCloseable firstScope = first.configureScopedServer(options);
+             IDocumentStore firstStore = first.getDocumentStore();
+             RavenTestDriver second = new RavenTestDriver();
+             CleanCloseable secondScope = second.configureScopedServer(options);
+             IDocumentStore secondStore = second.getDocumentStore()) {
+
+            assertThat(options.getCommandLineArgs()).containsOnlyOnce("-c", "--RunInMemory=true");
+        }
+    }
+
+    @Test
     public void failedScopedStartIsCachedInsteadOfRetried() {
         TestServerOptions options = scopedOptions();
         options.getLicensing().setLicense(INVALID_LICENSE);

@@ -60,6 +60,8 @@ configureServer(testServerOptions);
 
 `TestServerOptions` makes the server fail to start when no valid license is available. Provide one through
 `testServerOptions.getLicensing().setLicense(...)` / `setLicensePath(...)`, or the `RAVEN_License` environment variable.
+This also applies when `configureServer` is never called: the default server uses `TestServerOptions` too, so a
+license is always required (a free developer license works).
 
 ### Write a test
 ```java
