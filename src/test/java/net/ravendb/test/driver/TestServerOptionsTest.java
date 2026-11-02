@@ -40,4 +40,16 @@ public class TestServerOptionsTest {
     public void machineNameIsResolved() {
         assertThat(TestServerOptions.getMachineName()).isNotBlank();
     }
+
+    @Test
+    public void machineNameIsTheShortHostName() {
+        // like .NET's Environment.MachineName, never an FQDN
+        assertThat(TestServerOptions.getMachineName()).doesNotContain(".");
+    }
+
+    @Test
+    public void hostNameIsTruncatedAtTheFirstDot() {
+        assertThat(TestServerOptions.toShortHostName("myhost.corp.local")).isEqualTo("myhost");
+        assertThat(TestServerOptions.toShortHostName("myhost")).isEqualTo("myhost");
+    }
 }
